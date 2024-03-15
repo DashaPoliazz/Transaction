@@ -1,11 +1,14 @@
-'use strict';
+"use strict";
 
 function Transaction() {}
 
 Transaction.start = (data) => {
-  console.log('\nstart transaction');
+  console.log("\nstart transaction");
   const events = {
-    commit: [], rollback: [], timeout: [], change: []
+    commit: [],
+    rollback: [],
+    timeout: [],
+    change: [],
   };
   let delta = {};
 
@@ -18,11 +21,11 @@ Transaction.start = (data) => {
     commit: () => {
       Object.assign(data, delta);
       delta = {};
-      emit('commit');
+      emit("commit");
     },
     rollback: () => {
       delta = {};
-      emit('rollback');
+      emit("rollback");
     },
     clone: () => {
       const cloned = Transaction.start(data);
@@ -32,32 +35,32 @@ Transaction.start = (data) => {
     on: (name, callback) => {
       const event = events[name];
       if (event) event.push(callback);
-    }
+    },
   };
 
   return new Proxy(data, {
     get(target, key) {
-      if (key === 'delta') return delta;
+      if (key === "delta") return delta;
       if (methods.hasOwnProperty(key)) return methods[key];
       if (delta.hasOwnProperty(key)) return delta[key];
       return target[key];
     },
-    getOwnPropertyDescriptor: (target, key) => (
+    getOwnPropertyDescriptor: (target, key) =>
       Object.getOwnPropertyDescriptor(
-        delta.hasOwnProperty(key) ? delta : target, key
-      )
-    ),
+        delta.hasOwnProperty(key) ? delta : target,
+        key
+      ),
     ownKeys() {
       const changes = Object.keys(delta);
       const keys = Object.keys(data).concat(changes);
       return keys.filter((x, i, a) => a.indexOf(x) === i);
     },
     set(target, key, val) {
-      console.log('set', key, val);
+      console.log("set", key, val);
       if (target[key] === val) delete delta[key];
       else delta[key] = val;
       return true;
-    }
+    },
   });
 };
 
@@ -75,19 +78,60 @@ class DatasetTransaction {
   constructor(dataset) {
     this.dataset = dataset;
     this.log = []; // array of LogRecord { time, operation, delta }
+    this.id = 0;
+    this.writeLog("start");
   }
 
   static start(dataset) {
     // place implementation here
-    return new DatasetTransaction(dataset);
+    return new DatasetTransaction(dataset.map(Transaction.start));
+  }
+
+  writeLog(operation) {
+    const delta = this.getDelta();
+    const time = new Date(Date.now()).toISOString();
+    const id = this.id;
+    const log = { id, time, operation, delta };
+    this.log.push(log);
+  }
+
+  getDelta() {
+    const serialized = JSON.stringify(this.dataset);
+    const copyWithoutProxy = JSON.parse(serialized);
+    return copyWithoutProxy;
   }
 
   commit() {
     // place implementation here
+    this.writeLog("commit");
+    this.dataset.forEach((t) => t.commit());
   }
 
   rollback(id) {
-    // place implementation here
+    this.writeLog("rollback");
+
+    const rollback = this.log.find((r) => r.id === id);
+    if (!rollback) return;
+
+    const delta = rollback.delta;
+    this.dataset.forEach((currTransaction, idx) => {
+      const prevTransaction = delta[idx];
+      const prevTransactionKeys = Object.keys(prevTransaction);
+      const currTransactionKeys = Object.keys(currTransaction);
+
+      for (const currTransactionKey of currTransactionKeys) {
+        if (!prevTransaction.hasOwnProperty(currTransactionKey)) {
+          delete currTransaction[currTransactionKey];
+        }
+      }
+
+      for (const prevTransactionKey of prevTransactionKeys) {
+        currTransaction[prevTransactionKey] =
+          prevTransaction[prevTransactionKey];
+      }
+
+      currTransaction.commit();
+    });
   }
 
   //  msec <number> timeout, 0 to disable
@@ -97,23 +141,35 @@ class DatasetTransaction {
   //      result <boolean>
   timeout(msec, commit, listener) {
     // place implementation here
+    setTimeout(() => {
+      if (commit) this.commit();
+      else this.rollback();
+    }, msec);
   }
 }
 
 // Usage
 
 const data = [
-  { name: 'Marcus Aurelius', born: 121 },
-  { name: 'Marcus Aurelius', born: 121 },
-  { name: 'Marcus Aurelius', born: 121 },
+  { name: "Marcus Aurelius", born: 121 },
+  { name: "Marcus Aurelius", born: 121 },
+  { name: "Marcus Aurelius", born: 121 },
 ];
 
 const transaction = DatasetTransaction.start(data);
 
 for (const person of transaction.dataset) {
-  person.city = 'Shaoshan';
+  person.city = "Shaoshan";
 }
 
+console.log("Without changes\n");
+console.dir({ data });
 transaction.commit();
+console.log("With changes\n");
+console.dir({ data });
 
+console.log("Logs:\n");
+console.log(transaction.log[0]);
+
+transaction.rollback(0);
 console.dir({ data });
